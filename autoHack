@@ -1,0 +1,235 @@
+metaxploit = include_lib("/lib/metaxploit.so")
+if not metaxploit then
+    metaxploit = include_lib(current_path + "/metaxploit.so")
+end if
+if not metaxploit then exit("Error: Can't find metaxploit library in the /lib path or the current folder")
+cryptools = include_lib("/lib/crypto.so")
+if not cryptools then cryptools = include_lib(current_path+"/crypto.so")
+if not cryptools then exit("Error: Can't find crypto library")
+target_ip = null
+remote_ip = null
+// params: [remote_ip] optional:[target_ip]
+if params[0] == "-h" or params[0] == "--help" then
+	exit("<b>Usage: "+program_path.split("/")[-1]+" [remote_ip_address] optional:[target_ip_address]</b>")
+end if
+if params.len == 1 then
+	remote_ip = params[0]
+	print("<color=#e33c12>Received only remote ip, accessing first hackable ip</color>")
+end if
+if params.len == 2 then 
+	remote_ip = params[0]
+	target_ip = params[1]
+	print("<color=#e33c12>Received remote and target IPs. Attempting hack on target first</color>")
+end if
+
+shell = null
+comp = null
+pass = null
+file = null
+cont = null
+mailFile = null
+
+// open a shell session after receiving a shell object
+shellCon = function(shell,pass,ip)
+	if ip==target_ip then 
+		print("<color=#3cc745>Achieved a shell on the target machine</color>")
+	else
+		print("<color=#3cc745>Achieved a shell on a random machine in the network</color>")
+	end if
+	dec = cryptools.decipher(pass)
+	if dec then print("<color=#3cc745>Root Password Found: "+dec+"</color>")
+	shell.start_terminal
+end function
+
+// function that takes an ip and port and performs metasploit-fu
+hackFun = function(ip, port,lan_ip)
+	// attempt con to ip and port
+	net_session = metaxploit.net_use( ip, port )
+	if not net_session then 
+		print("Error: can't connect to net session")
+		return
+	end if
+	metaLib = net_session.dump_lib
+	memory = metaxploit.scan(metaLib)
+
+	for mem in memory
+		print("<color=#42f5bf>-------"+mem+"-------</color>")
+		address = metaxploit.scan_address(metaLib, mem).split("Unsafe check: ")
+		for add in address	
+			if add == address[0] then continue
+			if shell and pass then shellCon(shell, pass,lan_ip)
+		
+			value = add[add.indexOf("<b>")+3:add.indexOf("</b>")]
+			value = value.replace("\n","")
+			print("<color=#ad42f5>-------"+value+"-------</color>")
+			result = metaLib.overflow(mem,value)
+		
+			if typeof(result) != "shell" and typeof(result) != "computer" then continue
+			if typeof(result) == "shell" or typeof(result) == "ftpshell" then shell = result
+			if typeof(result) == "shell" then comp = result.host_computer
+			if typeof(result) == "computer" then comp = result
+		
+			if comp then 
+				file = comp.File("/etc/passwd")
+				if file then
+					if file.get_content != null then
+						cont = file.get_content
+					end if
+				end if
+			end if
+			if not cont then continue
+			// grab a user's mail.txt file for use later if shell not achieved through the whole process
+			pass = cont.split("\n")
+			for word in pass
+				temp = comp.File("/home/"+word.split(":")[0]+"/Config/Mail.txt")
+				if temp then
+					print("<color=#3cc745>Was able to find a Mail.txt file on IP: "+comp.local_ip+"</color>")
+					print(temp.get_content)
+				end if
+			end for
+			pass = pass[0]
+			pass = pass.split(":")[1]
+		
+			if shell then shellCon(shell,pass,lan_ip)
+		end for
+	end for
+
+	if shell then 
+		shell.start_terminal 
+	else 
+		print("<color=#ff0000>Exploit failed on IP: "+ip+" at port: "+port+"</color>")
+	end if
+
+	if pass then
+		print("<color=#ff0000>Was able to read /etc/passwd</color>")
+		print(cont)
+		dec = cryptools.decipher(pass)
+		if dec then print("<color=#3cc745>Root Password Found: "+dec+"</color>")
+		if mailFile then
+			print("<color=#3cc745>Was able to find a Mail.txt file:</color>")
+			print(mailFile.get_content)
+		end if
+	end if
+end function
+
+routerHack = function(obj,ip)
+	// attempt con to ip and port
+	net_session = metaxploit.net_use( ip )
+	if not net_session then 
+		exit("Error: can't connect to net session")
+	end if
+	metaLib = net_session.dump_lib
+	lib="kernel_router.so"
+	memory = metaxploit.scan(metaLib)
+	
+	for mem in memory
+		print("<color=#42f5bf>-------"+mem+"-------</color>")
+		address = metaxploit.scan_address(metaLib, mem).split("Unsafe check: ")
+		if not target_ip then user_input("Enter a target IP: ")
+		for add in address
+			if add == address[0] then continue
+			value = add[add.indexOf("<b>")+3:add.indexOf("</b>")]
+			value = value.replace("\n","")
+			print("<color=#42f5bf>-------"+value+"-------</color>")
+			result = metaLib.overflow(mem, value, target_ip)
+			if typeof(result) != "shell" and typeof(result) != "computer" and typeof(result) != "file" then continue
+			if typeof(result) == "shell" or typeof(result) == "ftpshell" then shell = result
+			if typeof(result) == "shell" then comp = result.host_computer
+			if typeof(result) == "computer" then comp = result
+			print(typeof(result))
+			if typeof(result) == "file" then 
+				print("Contents of "+result.name)
+				print(result.get_content) 
+				continue
+			end if
+			
+			if shell.host_computer.local_ip == target_ip then shell.start_terminal
+			
+			if comp then 
+				file = comp.File("/etc/passwd")
+				if file then
+					if file.get_content != null then
+						cont = file.get_content
+					end if
+				end if
+			end if
+			if not cont then continue
+			// grab a user's mail.txt file for use later if shell not achieved through the whole process
+			pass = cont.split("\n")
+			for word in pass
+				temp = comp.File("/home/"+word.split(":")[0]+"/Config/Mail.txt")
+				if temp then
+					print("<color=#3cc745>Was able to find a Mail.txt file on IP: "+comp.local_ip+"</color>")
+					print(temp.get_content)
+				end if
+			end for
+			pass = pass[0]
+			pass = pass.split(":")[1]
+			
+			if shell then shellCon(shell,pass,lan_ip)
+		end for
+	end for
+	if shell then 
+		shell.start_terminal 
+	else 
+		print("<color=#ff0000>Exploit failed on IP: "+ip+"</color>")
+	end if
+end function
+
+// perform one nmap scan
+router = get_router(remote_ip)
+// remote_ip is not a router!
+if router then 
+	port_list = used_ports(router)
+else
+	exit("Target is not a router")
+end if
+
+isRhack = false
+
+// check if router even has routed ports
+if not port_list then 
+	print("This router does not rout ports")
+	isRhack = true
+	routerHack(router,remote_ip)
+end if
+
+// print all port info on router
+text = "<color=#42f5bf>PORT STATE SERVICE VERSION LAN</color>"
+for p in port_list
+	ver = router.port_info(p)
+	op = null
+	if p.is_closed then 
+		op = "closed"
+	else 
+		op = "open" 
+	end if
+	text = text + "\n"+"<color=#ad42f5>"+p.port_number+" "+op+" "+ver+" "+p.get_lan_ip+"</color>"
+end for
+
+print("<color=#42f5bf>Remote IP: "+remote_ip+"</color>")
+print(format_columns(text))
+print()
+
+if target_ip == "router" and isRhack == "false" then
+	print("Selected router as point of entry")
+	routerHack(router,remote_ip)
+end if
+
+// loop through ports that are pointing to target IP first
+if target_ip then
+	for p in port_list
+		if p.get_lan_ip==target_ip and not p.is_closed then
+			print("<color=#c98000>Attempting hack on port: "+p.port_number+"</color>")
+			hackFun(remote_ip,p.port_number,p.get_lan_ip)
+		end if
+	end for
+end if
+
+// loop through all other ports on the network
+for p in port_list
+	if not p.is_closed then
+		print("<color=#c98000>Attempting hack on port: "+p.port_number+"</color>")
+		hackFun(remote_ip,p.port_number,p.get_lan_ip)
+	end if
+end for
